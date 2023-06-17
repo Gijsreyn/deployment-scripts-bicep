@@ -1,0 +1,129 @@
+parameters: 
+  - name: azureSubscription
+    type: string
+    displayName: 'The Azure subscription / service connection to target'
+  - name: templateResourceGroupName
+    type: string
+    displayName: 'The template specification resource group name to retrieve template'
+  - name: templateSpecVersion
+    type: string
+    displayName: 'The template specification version to retrieve'
+    default: ''
+  - name: templateSpecFileName
+    type: string
+    default: 'deployment-script-azps'
+    displayName: 'The template specification file name to retrieve'
+  - name: templateDeploymentName
+    type: string
+    displayName: 'The template deployment name'
+    default: ''
+  - name: resourceGroupName 
+    type: string
+    displayName: 'The resource group name to deploy against'
+  - name: mode
+    type: string
+    displayName: 'The mode to run against, defaults to Incremental'
+    default: Incremental
+    values: 
+      - Incremental
+      - Complete
+  - name: scriptContent
+    type: string
+    displayName: 'The content of the script'
+  - name: servicePrincipalId 
+    type: string
+    default: '$(spId)'
+    displayName: 'The service principal id, defaults to $(spId)'
+  - name: servicePrincipalKey
+    type: string
+    default: '$(spKey)'
+    displayName: 'The service principal key, defaults to $(spKey)'
+  - name: tenantId 
+    type: string
+    default: '$(tid)'
+    displayName: 'The Azure Tenant Id, defaults to $(tid)'
+  - name: argument
+    type: string
+    default: ''
+    displayName: 'The arguments to pass through the deployment scripts'
+
+steps:
+  - task: AzurePowerShell@5  
+    displayName: 'Deploy script ${{ parameters.scriptContent }}'
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      ScriptType: InlineScript
+      Inline: |
+        $Params = @{
+            ResourceGroupName = "${{ parameters.templateResourceGroupName }}"
+            Name = "${{ parameters.templateSpecFileName }}"
+            Version = "${{ parameters.templateSpecVersion }}"
+            ErrorAction = 'Stop'
+        }
+
+        $templateCheck = [string]::IsNullOrEmpty("${{ parameters.templateSpecVersion }}")
+
+        if ($templateCheck) {
+            Write-Host -Object "Removing 'version' from parameters as none was specified"
+            $Params.Remove('Version')
+        }
+
+        $Params.GetEnumerator() | ForEach-Object { $result = 'Parameter {0} with value {1}' -f $_.key, $_.value; Write-Host $result }
+
+        try {
+          $TemplateFile = (Get-AzTemplateSpec @Params).Versions
+        } catch {
+          Throw "Exception occurred when retrieving template specification: $_"
+        }
+
+        if ($templateCheck) {
+          $TemplateFile = ($TemplateFile | Select-Object -Last 1)
+        }
+
+        Write-Host -Object ("Template - '{0}' found with '{1}' version" -f "${{ parameters.templateSpecFileName }}", $TemplateFile.Id) 
+
+        if (-not (Test-Path "${{ parameters.scriptContent }}")) {
+          Write-Error -Message "Script path not found. Cannot locate - ${{ parameters.scriptContent}}."
+          return;
+        }
+
+        $scriptContent = (Get-Content -Path "${{ parameters.scriptContent }}" -Raw)
+
+        $DeploymentParameters = @{
+          TemplateSpecId = $TemplateFile.Id
+          ResourceGroupName = "${{ parameters.resourceGroupName }}"
+          Mode = "${{ parameters.mode }}"
+          scriptContent = $scriptContent
+          ServicePrincipalId = "${{ parameters.servicePrincipalId }}"
+          ServicePrincipalKey = (ConvertTo-SecureString -String "${{ parameters.servicePrincipalKey }}" -AsPlainText -Force)
+          TenantId = "${{ parameters.tenantId }}"
+          SubscriptionId = (Get-AzContext).Subscription.Id
+        }
+
+        if ("${{ parameters.argument }}" -ne '') {
+          Write-Host -Object ("Adding arguments - '{0}' to deployment parameters" -f "${{ parameters.argument }}")
+          $DeploymentParameters.Add('Argument', "${{ parameters.argument }}")
+        }
+
+        # if deploymentName is not specified, set it to buildnumber (without spaces)
+        $deploymentName = '${{ parameters.templateDeploymentName }}'
+        if ($deploymentName -eq '') {
+          $deploymentName = '$(Build.BuildNumber)'.Replace(' ', '')
+        }
+        $DeploymentParameters.Add('DeploymentName', $DeploymentName)
+
+        $DeploymentParameters.GetEnumerator() | ForEach-Object { $result = 'Parameter {0} with value {1}' -f $_.key, $_.value; Write-Host $result }
+
+        # AST validation
+        $Ast = [Management.Automation.Language.Parser]::ParseInput($scriptContent, [ref]$null, [ref]$null)
+        $Ast.paramblock.parameters.name.variablepath | Foreach-Object { Write-Host -Object ("Expecting the following parameter to be passed to script - '{0}'" -f $_.UserPath)}
+        $ParamBlock = $Ast.ParamBlock.Parameters 
+        if ($ParamBlock -and "${{ parameters.argument}}" -eq '') {
+          Write-Host "##[warning]Parameter block exists in script, but no arguments specified. Please add the appropriate arguments if required."
+        }
+
+        # Deployment 
+        New-AzResourceGroupDeployment @DeploymentParameters
+      FailOnStandardError: true
+      azurePowerShellVersion: LatestVersion
+      pwsh: true

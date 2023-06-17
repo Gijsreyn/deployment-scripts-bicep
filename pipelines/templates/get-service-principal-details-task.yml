@@ -1,0 +1,16 @@
+parameters: 
+  - name: azureSubscription
+    type: string
+
+steps: 
+  - task: AzureCLI@2
+    displayName: 'Get service principal details'
+    inputs:
+      azureSubscription: ${{ parameters.azureSubscription }}
+      scriptType: 'pscore'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        Write-Host "##vso[task.setvariable variable=spId]$env:servicePrincipalId"
+        Write-Host "##vso[task.setvariable variable=spKey;isSecret=true]$env:servicePrincipalKey"
+        Write-Host "##vso[task.setvariable variable=tid]$env:tenantId"
+      addSpnToEnvironment: true

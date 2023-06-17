@@ -1,0 +1,27 @@
+parameters: 
+ - name: azureSubscription 
+   type: string 
+ - name: resourceGroupName 
+   type: string 
+ - name: objectId 
+   type: string 
+ - name: targetResourceGroupName 
+   type: string
+
+stages:   
+  - stage: PostDeployment
+    jobs:
+      - job: PostDeployment
+        pool:
+          vmImage: windows-latest 
+        steps:
+          - template: /pipelines/templates/get-service-principal-details-task.yml
+            parameters: 
+              azureSubscription: ${{ parameters.azureSubscription }}
+          - template: /pipelines/templates/template-spec-deployment-scripts-task.yml
+            parameters:
+              azureSubscription: ${{ parameters.azureSubscription }}
+              templateResourceGroupName: ${{ parameters.resourceGroupName }}
+              resourceGroupName: ${{ parameters.targetResourceGroupName }}
+              scriptContent: '$(System.DefaultWorkingDirectory)\Scripts\Add-AzRoleAssignmentSpn.ps1'
+              argument: -ObjectId '${{ parameters.objectId }}' -ResourceGroupName ${{ parameters.targetResourceGroupName }}
